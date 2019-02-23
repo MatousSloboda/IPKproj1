@@ -13,7 +13,7 @@ except:
     print 'Port is taken'
     sys.exit()
 
-sock.listen(10)
+sock.listen(100)
 
 while True:
     print 'waiting for a connection'
