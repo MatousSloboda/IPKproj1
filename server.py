@@ -1,5 +1,18 @@
 import socket
 import sys
+import re
+
+
+def splitRequest(data):
+    data = data.splitlines()
+    print 'DATA: %s' %data
+    return data
+
+def removeSpaces(line):
+    print 'Linia pred %s' %line
+    print 'Linia je rozdelena na %s' % re.split("/",line)
+    line = re.split("/",line)
+    return line[0].replace(" ", "")
 
 # Create a TCP/IP socket
 sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -21,10 +34,10 @@ while True:
     print 'connection from', client_address
 
     data = connection.recv(1024)
-    print 'received "%s"' % data
+    data = splitRequest(data)
+    requestType = removeSpaces(data[0])
 
-    if data[:3] == "GET":
-        #sock.sendto('Dostal som GET',client_address)
+    if requestType == "GET":
         '''
         response_proto = 'HTTP/1.1'
         response_status = '200'
