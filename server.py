@@ -36,7 +36,6 @@ def handleRequest(connection, client_address, i):
                 print 'ERROR in HTTP request'
                 connection.close()
                 return
-            print requestLine
             
             if requestLine[0] != "GET":
                 response_proto = 'HTTP/1.1'
@@ -55,19 +54,20 @@ def handleRequest(connection, client_address, i):
                 return
 
             else:    
-                #hlavicka accept a chyba ak ja to nepodporujem pozor */* znamena vsetko
                 #Ak mam hlavicku 1.0 a tam mam connection keep alive tak drzim, inak nie
-                #prvy riadok suboru aky get pozaduje
                 #nacitanie zo suboru
-                if requestLine[1] == '/hostname':
-                    #tu riesim accept a v pripade HTTP/1.0 connection : keep-alive
-                    if accepts(returnHeadderLine('Accept', data)) == 'text':
-                        print 'accepts text'
-                    elif accepts(returnHeadderLine('Accept', data)) == 'json':
-                        print 'accepts json'
-                    else:
+                accepts = recieverAccepts(returnHeadderLine('Accept', data))
+                if accepts == 'text':
+                    print 'accepts text'
+                elif accepts == 'json':
+                    print 'accepts json'
+                else:
+                    print 'Nepodporovany format'
+                    connection.close()
+                    return
 
-                    #print 'hostname'
+                if requestLine[1] == '/hostname':
+                    print 'hostname'
 
                 elif requestLine[1] == '/cpu-name':
                     print returnHeadderLine('Accept', data)
@@ -118,7 +118,7 @@ def returnHeadderLine(option, data):
             return i[1].lower()
     return None
 
-def accepts(line):
+def recieverAccepts(line):
     if line.find('*/*') > 0:
         return 'text'
     elif line.find('text/plain') > 0:
@@ -133,7 +133,7 @@ def accepts(line):
 try:
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 except:
-    print 'Cannot create socket!'
+    print 'Error creating socket!'
     sys.exit()
 
 port = int(sys.argv[1])
