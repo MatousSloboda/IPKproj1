@@ -10,7 +10,6 @@ import platform
 def handleRequest(connection, client_address, i):
     timeout = time.time()
     possibleRequests = 20
-    print 'NEW PROCESS: %d' %i
     while(1):
         if possibleRequests < 0:
             print 'Too many requests'
@@ -60,22 +59,32 @@ def handleRequest(connection, client_address, i):
                 keepAlive = recieverKeepAlive(returnHeadderLine('Connection', data))
 
                 if requestLine[1] == '/hostname':
-                    sendPositiveAnswer(accepts, possibleRequests, False, 0, socket.gethostname(), connection )
+                    sendPositiveAnswer(accepts, possibleRequests, False, 20, socket.gethostname(), connection )
 
                 elif requestLine[1] == '/cpu-name':
-                    sendPositiveAnswer(accepts, possibleRequests, False, 0, platform.processor(), connection )
+                    sendPositiveAnswer(accepts, possibleRequests, False, 20, platform.processor(), connection )
 
                 elif requestLine[1] == '/load':
-                    sendPositiveAnswer(accepts, possibleRequests, False, 0, 'load', connection )
+
+                    start = readCPUstat()
+                    time.sleep(1)
+                    stop = readCPUstat()
+
+                    sendPositiveAnswer(accepts, possibleRequests, False, 20, calculateCpuStat(start, stop), connection )
 
                 elif requestLine[1][:14] == '/load?refresh=':
                     try:
                         refreshTime = int(requestLine[1][14:])
-                        sendPositiveAnswer(accepts, possibleRequests, True, refreshTime, 'loadRefresh', connection )
                     except:
                         sendNegativeResponse('405','Method Not Allowed', connection)
                         connection.close()
                         return
+                    start = readCPUstat()
+                    time.sleep(1)
+                    stop = readCPUstat()
+
+                    sendPositiveAnswer(accepts, possibleRequests, True, refreshTime, calculateCpuStat(start, stop), connection )
+
                 else:
                     sendNegativeResponse('405','Method Not Allowed', connection)
                     connection.close()
@@ -85,6 +94,34 @@ def handleRequest(connection, client_address, i):
                 possibleRequests = possibleRequests - 1
                 timeout = time.time()
 
+def calculateCpuStat(start, stop):
+    Total = stop['total']
+    PrevTotal = start['total']
+
+    Idle = stop['idle']
+    PrevIdle = start['idle']
+
+    return (((Total-PrevTotal)-(Idle-PrevIdle))/(Total-PrevTotal)*100)
+
+def readCPUstat():
+    cpu_infos = {}
+    stats  = open('/proc/stat', 'r')
+    line = stats.readline()
+    stats.close()
+    line = ''.join(' ' if is_space else ''.join(chars) for is_space, chars in groupby(line, str.isspace))
+    cpuLoad = re.split(" ",line)
+
+    cpu_id,user,nice,system,idle,iowait,irq,softrig,steal,guest,guest_nice,daco = cpuLoad
+
+    Idle=float(idle)+float(iowait)
+    NonIdle=float(user)+float(nice)+float(system)+float(irq)+float(softrig)+float(steal)
+
+    Total=float(Idle)+float(NonIdle)
+    cpu_infos.update({'total':Total,'idle':Idle})
+
+    print cpu_infos
+
+    return cpu_infos
 
 
 def sendPositiveAnswer(contentType, possibleRequests, refresh, refreshTime, message, connection):
@@ -93,7 +130,7 @@ def sendPositiveAnswer(contentType, possibleRequests, refresh, refreshTime, mess
     response_status_text = 'OK'
 
     if contentType == 'text/plain':
-        msg = message + '\n'
+        msg = str(message) + '% \n'
     else:
         msg = message
     #else:
