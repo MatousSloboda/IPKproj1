@@ -27,13 +27,13 @@ def returnHeadderLine(option, data):
 def occursInAccepts(line):
     if not line:
         return 'text/plain'
-    if line.find('*/*') > 0:
+    elif line.find('*/*') > 0:
         return 'text/plain'
     elif line.find('text/plain') > 0 or line.find('text/*') > 0:
         return 'text/plain'
     elif line.find('application/json') > 0 or line.find('application/*') > 0:
         return 'application/json'
-    return 'text/plain'
+    return None
 
 def occursKeepAlive(line):
     if not line:
@@ -68,31 +68,42 @@ def readCPUstat():
     Total=float(Idle)+float(NonIdle)
     cpu_infos.update({'total':Total,'idle':Idle})
 
-    print cpu_infos
-
     return cpu_infos
 
 
 
-def sendPositiveAnswer(keepAlive, contentType, possibleRequests, refresh, refreshTime, message, connection, caller):
+def sendPositiveAnswer(attributes):
     response_proto = 'HTTP/1.1'
     response_status = '200'
     response_status_text = 'OK'
 
-    message = str(message)
+    bodyText            = str(attributes['body'])
+    contentType         = attributes['accepts']
+    keepAlive           = attributes['keepAlive']
+    possibleRequests    = attributes['possibleRequests'] 
+    refreshAllowed      = attributes['refreshAllowed']
+    connection          = attributes['connection']
 
-    if contentType == 'text/plain':
-        msg = message + '% \n'          #tu este zariad ze nie vzdy posles '%'
+    #creating body
+    if contentType == 'application/json':
+        if attributes['type'] == 'load':
+            msg ="{\"%s\": \"%s%%\"}" % (attributes['type'], bodyText)
+        else:
+            msg ="{\"%s\": \"%s\"}" % (attributes['type'], bodyText)
     else:
-        msg ="{\"%s\": \"%s\"}" % (caller, message)  # tu tiez niekedy posli '%' a niekedy nie
-
+        if attributes['type'] == 'load':
+            msg = bodyText + '%\n'
+        else:
+            msg = bodyText + '\n'
+            
+    #creating headder
     if keepAlive:
-        if refresh:
+        if refreshAllowed:
             response_headers = {
                 'Content-Type': contentType + ' encoding=utf8',
                 'Content-Length': len(msg),
                 'Keep-Alive' : 'timeout=10, max=%d' %possibleRequests,
-                'Refresh' : refreshTime
+                'Refresh' : attributes['refreshTime']
             }
         else:
             response_headers = {
@@ -100,12 +111,13 @@ def sendPositiveAnswer(keepAlive, contentType, possibleRequests, refresh, refres
                 'Content-Length': len(msg),
                 'Keep-Alive' : 'timeout=10, max=%d' %possibleRequests,
             }
-    else:   #client send connection : close
-        if refresh:
+    else:   
+    #client send connection : close
+        if refreshAllowed:
             response_headers = {
                 'Content-Type': contentType + ' encoding=utf8',
                 'Content-Length': len(msg),
-                'Refresh' : refreshTime,
+                'Refresh' : attributes['refreshTime'],
                 'Connection' : 'close'
             }
         else:
@@ -117,11 +129,18 @@ def sendPositiveAnswer(keepAlive, contentType, possibleRequests, refresh, refres
 
     response_headers_raw = ''.join('%s: %s\n' % (k, v) for k, v in \
                                             response_headers.iteritems())
-    connection.send('%s %s %s\r\n' % (response_proto, response_status, response_status_text))
-    connection.send(response_headers_raw)
-    connection.send('\r\n')
-    connection.send(msg)
-    return
+    try:    #prevention if client closed socket
+        connection.send('%s %s %s\r\n' % (response_proto, response_status, response_status_text))
+        connection.send(response_headers_raw)
+        connection.send('\r\n')
+        connection.send(msg)
+        return 0
+    except socket.error, e:
+            err = e.args[0]
+            print err
+            print 'Error sock send'
+            return 1
+    
 
 
 
@@ -133,15 +152,15 @@ def sendNegativeResponse(status, statusText, connection):
     try:
         connection.send('%s %s %s\r\n' % (response_proto, response_status, response_status_text))
         connection.send('\r\n')
+        return 0
     except socket.error, e:
-        print 'Error'
+        print 'Error sock send'
         err = e.args[0]
         print err
+        return 1
 
-    return
 
-
-def handleRequest(connection, client_address, i):
+def handleRequest(connection, client_address):
     timeout = time.time()
     possibleRequests = 20
     while(1):
@@ -187,16 +206,45 @@ def handleRequest(connection, client_address, i):
 
             else:    
                 accepts = occursInAccepts(returnHeadderLine('Accept', data))
-                keepAlive = occursKeepAlive(returnHeadderLine('Connection', data)) #False if 'Connection : close'
+                keepAlive = occursKeepAlive(returnHeadderLine('Connection', data)) #True if 'Connection : keep-alive' or Connection is not mentioned in socket
+
+                if accepts == None:
+                    sendNegativeResponse('406','Not Acceptable', connection)
+                    connection.close()
+                    print 'Unsupported method'
+                    return
 
                 if requestLine[1] == '/hostname':
-                    sendPositiveAnswer(keepAlive, accepts, possibleRequests, False, 20, socket.gethostname(), connection, 'hostname' )
+                    messageFeatures = {
+                        'keepAlive'         : keepAlive,
+                        'accepts'           : accepts,
+                        'possibleRequests'  : possibleRequests,
+                        'refreshAllowed'    : False,
+                        'body'              : socket.gethostname(),
+                        'connection'        : connection,
+                        'type'              : 'hostname'
+                    }
+                    if sendPositiveAnswer(messageFeatures) == 1:
+                        connection.close()
+                        return
                     if not keepAlive:
                         connection.close()
                         return
 
                 elif requestLine[1] == '/cpu-name':
-                    sendPositiveAnswer(keepAlive, accepts, possibleRequests, False, 20, platform.processor(), connection, 'cpu-name' )
+                    messageFeatures = {
+                        'keepAlive'         : keepAlive,
+                        'accepts'           : accepts,
+                        'possibleRequests'  : possibleRequests,
+                        'refreshAllowed'    : False,
+                        'body'              : platform.processor(),
+                        'connection'        : connection,
+                        'type'              : 'cpu-name'
+                    }
+
+                    if sendPositiveAnswer(messageFeatures) == 1:
+                        connection.close()
+                        return
                     if not keepAlive:
                         connection.close()
                         return
@@ -207,7 +255,19 @@ def handleRequest(connection, client_address, i):
                     time.sleep(1)
                     stop = readCPUstat()
 
-                    sendPositiveAnswer(keepAlive, accepts, possibleRequests, False, 20, calculateCpuStat(start, stop), connection, 'load' )
+                    messageFeatures = {
+                        'keepAlive'         : keepAlive,
+                        'accepts'           : accepts,
+                        'possibleRequests'  : possibleRequests,
+                        'refreshAllowed'    : False,
+                        'body'              : round(calculateCpuStat(start, stop),2),
+                        'connection'        : connection,
+                        'type'              : 'load'
+                    }
+
+                    if sendPositiveAnswer(messageFeatures) == 1:
+                        connection.close()
+                        return
                     if not keepAlive:
                         connection.close()
                         return
@@ -216,27 +276,40 @@ def handleRequest(connection, client_address, i):
                     try:
                         refreshTime = int(requestLine[1][14:])
                     except:
-                        sendNegativeResponse('405','Method Not Allowed', connection)
+                        sendNegativeResponse('406','Not Acceptable', connection)
                         connection.close()
                         return
+
                     start = readCPUstat()
                     time.sleep(1)
                     stop = readCPUstat()
 
-                    sendPositiveAnswer(keepAlive, accepts, possibleRequests, True, refreshTime, calculateCpuStat(start, stop), connection, 'load' )
+                    messageFeatures = {
+                        'keepAlive'         : keepAlive,
+                        'accepts'           : accepts,
+                        'possibleRequests'  : possibleRequests,
+                        'refreshAllowed'    : True,
+                        'refreshTime'       : refreshTime,
+                        'body'              : round(calculateCpuStat(start, stop),2),
+                        'connection'        : connection,
+                        'type'              : 'load'
+                    }
+
+                    if sendPositiveAnswer(messageFeatures) == 1:
+                        connection.close()
+                        return
                     if not keepAlive:
                         connection.close()
                         return
 
                 else:
-                    sendNegativeResponse('405','Method Not Allowed', connection)
+                    sendNegativeResponse('404','Not Found', connection)
                     connection.close()
                     print 'Bad path'
                     return
                 
                 possibleRequests = possibleRequests - 1
                 timeout = time.time()
-
 
 
 
@@ -260,21 +333,18 @@ except:
 
 sock.listen(100)
 
-connectionServed = 0
 
 while True:
-    print 'waiting for a connection'
     connection, client_address = sock.accept()
     connection.settimeout(1)
-    connectionServed = connectionServed + 1
 
     newpid = os.fork()
     if newpid > 0:
         connection.close()
         continue
     elif newpid == 0:
-        handleRequest(connection, client_address, connectionServed)
+        handleRequest(connection, client_address)
         break
     else:
         print 'Error creating new process. Main process will handle your request. Not possible to handle parallel requests now!'
-        handleRequest(connection, client_address, connectionServed)
+        handleRequest(connection, client_address)
